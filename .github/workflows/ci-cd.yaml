@@ -126,42 +126,48 @@ jobs:
           server_port: 465
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "🚀 Admin Service CI/CD: ${{ github.repository }} | Status: ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && 'FAILED' || 'SUCCESS' }}"
+          subject: "${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && '❌ FAILED' || '✅ SUCCESS' }}: ${{ github.repository }} (Branch: ${{ github.ref_name }})"
           to: ${{ secrets.DEVELOPMENT_TEAM_EMAIL }}
-          from: "Paycrest Automation <${{ secrets.MAIL_USERNAME }}>"
+          from: "Paycrest DevOps <${{ secrets.MAIL_USERNAME }}>"
           html_body: |
-            <div style="font-family: Arial, sans-serif; max-width: 600px; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px;">
-              <h2 style="color: #2c3e50; border-bottom: 2px solid #e67e22; padding-bottom: 10px;">Admin Service Pipeline Report</h2>
-              
-              <table style="width: 100%; margin-top: 20px;">
-                <tr>
-                  <td><strong>Status:</strong></td>
-                  <td>
-                    <span style="padding: 4px 8px; border-radius: 4px; color: white; background-color: ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && '#e74c3c' || '#27ae60' }};">
-                      ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && 'FAILED' || 'SUCCESS' }}
-                    </span>
-                  </td>
-                </tr>
-                <tr><td><strong>Repository:</strong></td><td>${{ github.repository }}</td></tr>
-                <tr><td><strong>Triggered By:</strong></td><td>${{ github.actor }}</td></tr>
-                <tr><td><strong>Event:</strong></td><td>${{ github.event_name }}</td></tr>
-                <tr><td><strong>Branch:</strong></td><td>`${{ github.ref_name }}`</td></tr>
-              </table>
-
-              <h3 style="color: #2c3e50; margin-top: 25px;">Job Breakdown</h3>
-              <ul style="list-style-type: none; padding-left: 0;">
-                <li style="padding: 8px; background: #f9f9f9; margin-bottom: 5px;">🛡️ <strong>Validation & Security:</strong> ${{ needs.security-and-validation.result || 'SKIPPED' }}</li>
-                <li style="padding: 8px; background: #f9f9f9; margin-bottom: 5px;">🐳 <strong>Production Release:</strong> ${{ needs.release-to-production.result || 'SKIPPED' }}</li>
-              </ul>
-
-              <div style="margin-top: 30px; text-align: center;">
-                <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
-                   style="background-color: #e67e22; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
-                   View Full Logs in GitHub
-                </a>
+            <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; border: 1px solid #ddd; border-radius: 10px; padding: 0;">
+              <div style="background-color: ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && '#d9534f' || '#5cb85c' }}; color: white; padding: 15px; border-radius: 10px 10px 0 0;">
+                <h2 style="margin: 0;">Pipeline ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && 'Failure' || 'Success' }}</h2>
               </div>
               
-              <p style="font-size: 12px; color: #7f8c8d; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px;">
-                This is an automated message from the Paycrest CI/CD system. Please do not reply.
-              </p>
+              <div style="padding: 20px;">
+                <p><strong>Repository:</strong> ${{ github.repository }}</p>
+                <p><strong>Commit:</strong> <code style="background: #eee; padding: 2px 5px;">${{ github.sha }}</code></p>
+                <p><strong>Author:</strong> ${{ github.actor }}</p>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                
+                <h3 style="color: #333;">Critical Failure Point Detection:</h3>
+                <ul style="list-style: none; padding: 0;">
+                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ needs.security-and-validation.result == 'failure' ? '#d9534f' : '#5cb85c' }}; background: #f9f9f9;">
+                    <strong>Step 1: Security & Validation</strong><br>
+                    Status: ${{ needs.security-and-validation.result }} 
+                    ${{ needs.security-and-validation.result == 'failure' && '⚠️ Check SonarQube or Dependency Logs' || '' }}
+                  </li>
+                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ needs.release-to-production.result == 'failure' ? '#d9534f' : '#5cb85c' }}; background: #f9f9f9;">
+                    <strong>Step 2: Production Release</strong><br>
+                    Status: ${{ needs.release-to-production.result || 'Not Started' }}
+                    ${{ needs.release-to-production.result == 'failure' && '⚠️ Check Docker Build or Trivy Logs' || '' }}
+                  </li>
+                </ul>
+
+                <div style="background: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin-top: 20px; font-size: 14px;">
+                  <strong>Note:</strong> Log content is too large for email. Please click the button below to see the specific line-by-line failure in GitHub Actions.
+                </div>
+
+                <div style="margin-top: 25px; text-align: center;">
+                  <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
+                     style="background-color: #333; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                    🔍 Troubleshoot Logs
+                  </a>
+                </div>
+              </div>
+              <div style="background: #f1f1f1; padding: 10px; text-align: center; font-size: 11px; color: #666;">
+                Paycrest Admin Service CI/CD • Auto-generated
+              </div>
             </div>
