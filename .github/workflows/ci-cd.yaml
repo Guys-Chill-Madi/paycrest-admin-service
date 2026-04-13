@@ -144,12 +144,12 @@ jobs:
                 
                 <h3 style="color: #333;">Critical Failure Point Detection:</h3>
                 <ul style="list-style: none; padding: 0;">
-                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ needs.security-and-validation.result == 'failure' ? '#d9534f' : '#5cb85c' }}; background: #f9f9f9;">
+                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ (needs.security-and-validation.result == 'failure' && '#d9534f') || '#5cb85c' }}; background: #f9f9f9;">
                     <strong>Step 1: Security & Validation</strong><br>
                     Status: ${{ needs.security-and-validation.result }} 
                     ${{ needs.security-and-validation.result == 'failure' && '⚠️ Check SonarQube or Dependency Logs' || '' }}
                   </li>
-                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ needs.release-to-production.result == 'failure' ? '#d9534f' : '#5cb85c' }}; background: #f9f9f9;">
+                  <li style="margin-bottom: 10px; padding: 10px; border-left: 5px solid ${{ (needs.release-to-production.result == 'failure' && '#d9534f') || '#5cb85c' }}; background: #f9f9f9;">
                     <strong>Step 2: Production Release</strong><br>
                     Status: ${{ needs.release-to-production.result || 'Not Started' }}
                     ${{ needs.release-to-production.result == 'failure' && '⚠️ Check Docker Build or Trivy Logs' || '' }}
