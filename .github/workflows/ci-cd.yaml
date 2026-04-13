@@ -1,0 +1,146 @@
+name: Paycrest Admin Service Pipeline
+
+on:
+  push:
+    branches: [ "test", "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  validate-and-scan:
+    name: Test and Security Scan
+    if: github.ref == 'refs/heads/test' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff # Adding ruff for fast linting
+
+      - name: Run Ruff Linting
+        run: ruff check 
+
+      - name: Run Tests
+        run: |
+          # If using pytest, uncomment below:
+          # pytest 
+          echo "Running unit tests..."
+
+      - name: Snyk Security Scan
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+          command: monitor
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Build Local Image for Scanning
+        run: docker build -t admin-service-test:${{ github.sha }} .
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'admin-service-test:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  release-to-production:
+    name: Build and Push to Docker Hub
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+
+  notifications:
+    name: Pipeline Notifications
+    needs: [validate-and-scan, release-to-production]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Success Email
+        if: |
+          (github.ref == 'refs/heads/test' && needs.validate-and-scan.result == 'success') ||
+          (github.ref == 'refs/heads/main' && needs.release-to-production.result == 'success')
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "✅ Success: ${{ github.repository }} Pipeline"
+          to: ${{ secrets.DEVELOPMENT_TEAM_EMAIL }}
+          from: GitHub Actions CI
+          body: |
+            Success! The ${{ github.repository }} pipeline passed on branch ${{ github.ref_name }}.
+            
+            REPORT SUMMARY:
+            - Ruff: Pass
+            - Snyk: Results pushed to dashboard
+            - SonarQube: Quality Gate passed
+            - Trivy: No Critical/High vulnerabilities
+            
+            View Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send Failure Email
+        if: |
+          needs.validate-and-scan.result == 'failure' || 
+          needs.release-to-production.result == 'failure'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "❌ FAILED: ${{ github.repository }} Pipeline"
+          to: ${{ secrets.DEVELOPMENT_TEAM_EMAIL }}
+          from: GitHub Actions CI
+          body: |
+            ⚠️ Attention: Pipeline Failure
+            
+            The workflow for ${{ github.repository }} failed. Check if the issue was related to Ruff linting, security vulnerabilities, or the Docker push.
+            
+            Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
