@@ -1,49 +1,33 @@
-name: Paycrest Admin Service Pipeline
+name: Paycrest Admin Service CI/CD
 
 on:
   push:
-    branches: [ "test", "main" ]
+    branches: [ "test" ]
   pull_request:
     branches: [ "main" ]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'MANDATORY: Enter version (e.g., v1.2.3)'
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  validate-and-scan:
-    name: Test and Security Scan
-    if: github.ref == 'refs/heads/test' || github.event_name == 'pull_request'
+  security-and-validation:
+    name: Security Scan Pipeline
+    if: |
+      (github.event_name == 'push' && github.ref_name == 'test') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.ref != 'test')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install ruff # Adding ruff for fast linting
-
-      - name: Run Ruff Linting
-        run: ruff check 
-
-      - name: Run Tests
-        run: |
-          # If using pytest, uncomment below:
-          # pytest 
-          echo "Running unit tests..."
-
-      - name: Snyk Security Scan
-        uses: snyk/actions/python@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: --severity-threshold=high
-          command: monitor
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v2
@@ -57,28 +41,55 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      - name: Snyk Security Scan
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+          command: monitor
+
       - name: Build Local Image for Scanning
-        run: docker build -t admin-service-test:${{ github.sha }} .
+        run: docker build -t admin-service-scan:${{ github.sha }} .
 
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'admin-service-test:${{ github.sha }}'
+          image-ref: 'admin-service-scan:${{ github.sha }}'
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
-          vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
   release-to-production:
     name: Build and Push to Docker Hub
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
     runs-on: ubuntu-latest
-    env:
-      IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Validate Version Tag
+        id: tag_check
+        run: |
+          RAW_TAG="${{ github.event.inputs.release_tag }}"
+          if [[ ! $RAW_TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid Tag Format. Please use v1.0.0"
+            exit 1
+          fi
+          echo "FINAL_TAG=$RAW_TAG" >> $GITHUB_ENV
+
+      - name: Final Build and Scan
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:${{ env.FINAL_TAG }} .
+
+      - name: Trivy Critical Check
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:${{ env.FINAL_TAG }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -86,61 +97,61 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and Push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:latest
+      - name: Push to Docker Hub
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:${{ env.FINAL_TAG }}
+          docker tag ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:${{ env.FINAL_TAG }} ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/paycrest-admin-service:latest
 
   notifications:
-    name: Pipeline Notifications
-    needs: [validate-and-scan, release-to-production]
+    name: Notifications
+    needs: [security-and-validation, release-to-production]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Send Success Email
-        if: |
-          (github.ref == 'refs/heads/test' && needs.validate-and-scan.result == 'success') ||
-          (github.ref == 'refs/heads/main' && needs.release-to-production.result == 'success')
+      - name: Send Detailed Email Report
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
           server_port: 465
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "✅ Success: ${{ github.repository }} Pipeline"
+          subject: "🚀 Admin Service CI/CD: ${{ github.repository }} | Status: ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && 'FAILED' || 'SUCCESS' }}"
           to: ${{ secrets.DEVELOPMENT_TEAM_EMAIL }}
-          from: GitHub Actions CI
-          body: |
-            Success! The ${{ github.repository }} pipeline passed on branch ${{ github.ref_name }}.
-            
-            REPORT SUMMARY:
-            - Ruff: Pass
-            - Snyk: Results pushed to dashboard
-            - SonarQube: Quality Gate passed
-            - Trivy: No Critical/High vulnerabilities
-            
-            View Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          from: "Paycrest Automation <${{ secrets.MAIL_USERNAME }}>"
+          html_body: |
+            <div style="font-family: Arial, sans-serif; max-width: 600px; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px;">
+              <h2 style="color: #2c3e50; border-bottom: 2px solid #e67e22; padding-bottom: 10px;">Admin Service Pipeline Report</h2>
+              
+              <table style="width: 100%; margin-top: 20px;">
+                <tr>
+                  <td><strong>Status:</strong></td>
+                  <td>
+                    <span style="padding: 4px 8px; border-radius: 4px; color: white; background-color: ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && '#e74c3c' || '#27ae60' }};">
+                      ${{ (needs.security-and-validation.result == 'failure' || needs.release-to-production.result == 'failure') && 'FAILED' || 'SUCCESS' }}
+                    </span>
+                  </td>
+                </tr>
+                <tr><td><strong>Repository:</strong></td><td>${{ github.repository }}</td></tr>
+                <tr><td><strong>Triggered By:</strong></td><td>${{ github.actor }}</td></tr>
+                <tr><td><strong>Event:</strong></td><td>${{ github.event_name }}</td></tr>
+                <tr><td><strong>Branch:</strong></td><td>`${{ github.ref_name }}`</td></tr>
+              </table>
 
-      - name: Send Failure Email
-        if: |
-          needs.validate-and-scan.result == 'failure' || 
-          needs.release-to-production.result == 'failure'
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "❌ FAILED: ${{ github.repository }} Pipeline"
-          to: ${{ secrets.DEVELOPMENT_TEAM_EMAIL }}
-          from: GitHub Actions CI
-          body: |
-            ⚠️ Attention: Pipeline Failure
-            
-            The workflow for ${{ github.repository }} failed. Check if the issue was related to Ruff linting, security vulnerabilities, or the Docker push.
-            
-            Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              <h3 style="color: #2c3e50; margin-top: 25px;">Job Breakdown</h3>
+              <ul style="list-style-type: none; padding-left: 0;">
+                <li style="padding: 8px; background: #f9f9f9; margin-bottom: 5px;">🛡️ <strong>Validation & Security:</strong> ${{ needs.security-and-validation.result || 'SKIPPED' }}</li>
+                <li style="padding: 8px; background: #f9f9f9; margin-bottom: 5px;">🐳 <strong>Production Release:</strong> ${{ needs.release-to-production.result || 'SKIPPED' }}</li>
+              </ul>
+
+              <div style="margin-top: 30px; text-align: center;">
+                <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
+                   style="background-color: #e67e22; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                   View Full Logs in GitHub
+                </a>
+              </div>
+              
+              <p style="font-size: 12px; color: #7f8c8d; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px;">
+                This is an automated message from the Paycrest CI/CD system. Please do not reply.
+              </p>
+            </div>
